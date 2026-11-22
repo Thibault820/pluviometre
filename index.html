@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pluviomètre</title>
+<title>Station météo</title>
 <style>
 *{box-sizing:border-box}
 html,body{margin:0;background:#F4F6F9}
@@ -17,7 +17,7 @@ button:disabled{cursor:default;opacity:.45}
 .entete{display:flex;justify-content:space-between;align-items:baseline}
 h2.t{margin:0;font-size:15px;font-weight:600}
 .doux{color:#4B5563}
-.tab{display:flex;align-items:center;justify-content:center;min-height:44px;border-radius:10px;color:#374151;font-size:14px;font-weight:500;text-decoration:none}
+.tab{display:flex;align-items:center;justify-content:center;min-height:44px;border-radius:10px;color:#374151;font-size:13px;font-weight:500;text-decoration:none}
 .tab.on{background:#FFFFFF;color:#1D4ED8;font-weight:600;box-shadow:0 1px 2px rgba(17,24,39,.08)}
 .graph{display:flex;align-items:flex-end}
 .bc{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center}
@@ -36,12 +36,12 @@ h2.t{margin:0;font-size:15px;font-weight:600}
 <div id="app">
 <header style="display:flex;flex-direction:column;gap:4px">
 <div class="entete">
-<h1 style="margin:0;font-size:24px;font-weight:700;letter-spacing:-0.01em">Pluviomètre</h1>
+<h1 style="margin:0;font-size:24px;font-weight:700;letter-spacing:-0.01em">Station météo</h1>
 <span style="display:flex;align-items:baseline;gap:10px"><span style="font-size:13px;font-weight:600;color:#4B5563">THIBO</span><button type="button" id="deco" hidden style="min-height:32px;padding:0 10px;border:1px solid #CBD2DC;border-radius:8px;background:#FFFFFF;color:#374151;font-size:12px;cursor:pointer">Déconnexion</button></span>
 </div>
 <p id="maj" style="margin:0;font-size:13px;color:#4B5563">…</p>
 </header>
-<nav id="nav" aria-label="Onglets" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;padding:4px;background:#E6E9EF;border-radius:14px"></nav>
+<nav id="nav" aria-label="Onglets" style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;padding:4px;background:#E6E9EF;border-radius:14px"></nav>
 <p id="err" class="err" role="alert" hidden></p>
 <div id="vue" class="vue"></div>
 </div>
@@ -51,7 +51,7 @@ var J = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
 var M = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
 var ML = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
 var MOIS_LONG = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
-var ONGLETS = [['mesures', 'Mesures'], ['jour', 'Jour'], ['historique', 'Historique'], ['semis', 'Semis']];
+var ONGLETS = [['mesures', 'Pluie'], ['temp', 'Temp.'], ['jour', 'Jour'], ['historique', 'Historique'], ['semis', 'Semis']];
 var S = { seuil: null, range: '', jour: null, annee: null, du: null, au: null, csv: false, culture: 'Blé', dSemis: null };
 var $ = function (id) { return document.getElementById(id); };
 
@@ -117,16 +117,19 @@ function fbPeriode(du, au, J, B) {
   };
 }
 function fbSemis() {
-  return Promise.all([fbLit('semis'), fbVue('jours'), fbVue('bornes')]).then(function (r) {
-    var s = r[0] || {}, J = r[1], B = r[2], auj = iso(new Date());
-    var liste = Object.keys(s).map(function (k) { return { id: k, culture: s[k].culture, date: s[k].date }; });
-    liste.sort(function (x, y) { return x.date < y.date ? 1 : x.date > y.date ? -1 : (x.id < y.id ? 1 : -1); });
-    liste.forEach(function (x) {
-      x.jours = Math.round((dt(auj) - dt(x.date)) / 864e5);
-      x.cumul = x.date >= B.min ? r1(Object.keys(J).reduce(function (t, k) { return k >= x.date && k <= auj ? t + J[k] : t; }, 0)) : null;
+  return fbLit('semis').then(function (s) {
+    s = s || {};
+    var liste = Object.keys(s).map(function (k) {
+      return { id: k, culture: s[k].culture, date: s[k].date, objectif: s[k].objectif == null ? null : s[k].objectif };
     });
-    return { aujourdhui: auj, cultures: CULTURES, semis: liste };
+    liste.sort(function (x, y) { return x.date < y.date ? 1 : x.date > y.date ? -1 : (x.id < y.id ? 1 : -1); });
+    return { aujourdhui: iso(new Date()), cultures: CULTURES, semis: liste };
   });
+}
+function lireObjectif(v) {
+  if (v == null || v === '') { return null; }
+  if (typeof v !== 'number' || !(v > 0 && v <= 5000)) { throw new Error('objectif : nombre de degrés-jours entre 1 et 5000'); }
+  return Math.round(v);
 }
 function apiFB(url, opt) {
   var u = new URL(url, location.href), q = u.searchParams, quoi = u.pathname.replace(/^.*\/api\//, '');
@@ -151,12 +154,26 @@ function apiFB(url, opt) {
   else if (quoi === 'periode') {
     p = Promise.all([fbVue('jours'), fbVue('bornes')]).then(function (r) { return fbPeriode(q.get('du'), q.get('au'), r[0], r[1]); });
   }
+  else if (quoi === 'temp') { p = fbVue('temp'); }
+  else if (quoi === 'series') {
+    p = Promise.all([fbVue('bornes'), fbVue('jours'), fbLit('vues/temp_jours')]).then(function (r) {
+      return { bornes: r[0], jours: r[1], temp_jours: r[2] ? JSON.parse(r[2]) : {} };
+    });
+  }
   else if (quoi === 'semis' && methode === 'GET') { p = fbSemis(); }
+  else if (quoi === 'semis' && methode === 'PUT') {
+    var m = JSON.parse(opt.body || '{}'), obj;
+    try { obj = lireObjectif(m.objectif); } catch (e) { return Promise.reject(e); }
+    if (!/^[-\w]{1,64}$/.test(m.id || '')) { return Promise.reject(new Error('semis inconnu')); }
+    p = fbDb.ref('pluviometre/semis/' + m.id + '/objectif').set(obj).then(fbSemis, function (e) { throw fbErr(e); });
+  }
   else if (quoi === 'semis' && methode === 'POST') {
     var c = JSON.parse(opt.body || '{}'), auj = iso(new Date());
     if (CULTURES.indexOf(c.culture) < 0) { return Promise.reject(new Error('culture inconnue')); }
     if (!/^20\d\d-\d\d-\d\d$/.test(c.date || '') || c.date > auj) { return Promise.reject(new Error('date hors limites')); }
-    p = fbDb.ref('pluviometre/semis').push({ culture: c.culture, date: c.date }).then(fbSemis, function (e) { throw fbErr(e); });
+    var nouveau = { culture: c.culture, date: c.date };
+    try { var o = lireObjectif(c.objectif); if (o != null) { nouveau.objectif = o; } } catch (e) { return Promise.reject(e); }
+    p = fbDb.ref('pluviometre/semis').push(nouveau).then(fbSemis, function (e) { throw fbErr(e); });
   }
   else if (quoi === 'semis' && methode === 'DELETE') {
     var id = q.get('id') || '';
@@ -521,55 +538,232 @@ function vueHistorique() {
   });
 }
 
+// ---------- Températures ----------
+// Degrés-jours : maïs base 6 °C (min ramené à 6, max plafonné à 30) ; pomme de terre base 6 ; autres base 0.
+var BASES = { 'Maïs': [6, 30], 'Pomme de terre': [6, null] };
+function baseDJ(c) { return BASES[c] || [0, null]; }
+function djour(c, tn, tx) {
+  var b = baseDJ(c);
+  var v = b[1] != null ? (Math.max(tn, b[0]) + Math.min(tx, b[1])) / 2 - b[0] : (tn + tx) / 2 - b[0];
+  return v > 0 ? v : 0;
+}
+function hm(s) { return s ? s.slice(11, 13).replace(/^0(?=\d)/, '') + 'h' + s.slice(14, 16) : ''; }
+function entier(v) { return Math.round(v).toLocaleString('fr-FR'); }
+var BLEU = '#1D4ED8', ORANGE = '#C2410C';
+
+function courbe24(h) {
+  var W = 360, H = 130, P = 16, vals = h.map(function (x) { return x.t; }).filter(function (v) { return v != null; });
+  if (!vals.length) { return '<p style="margin:8px 0 0;font-size:13px;color:#4B5563">Pas encore de relevés.</p>'; }
+  var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+  if (hi - lo < 4) { var c = (hi + lo) / 2; lo = c - 2; hi = c + 2; }
+  var X = function (i) { return P + i * (W - 2 * P) / (h.length - 1); };
+  var Y = function (v) { return 24 + (hi - v) / (hi - lo) * (H - 50); };
+  var segs = [], cur = [], imin = -1, imax = -1;
+  h.forEach(function (x, i) {
+    if (x.t == null) { if (cur.length) { segs.push(cur); cur = []; } return; }
+    cur.push(X(i).toFixed(1) + ',' + Y(x.t).toFixed(1));
+    if (imin < 0 || x.t < h[imin].t) { imin = i; }
+    if (imax < 0 || x.t > h[imax].t) { imax = i; }
+  });
+  if (cur.length) { segs.push(cur); }
+  var pt = function (i, coul, dy) {
+    return '<circle cx="' + X(i).toFixed(1) + '" cy="' + Y(h[i].t).toFixed(1) + '" r="4" fill="' + coul + '"></circle>' +
+      '<text x="' + X(i).toFixed(1) + '" y="' + (Y(h[i].t) + dy).toFixed(1) + '" font-size="11" font-weight="700" fill="' + coul + '" text-anchor="middle">' + fmt(h[i].t) + '°</text>';
+  };
+  var labs = h.map(function (x, i) {
+    return i % 4 === 0 ? '<text x="' + X(i).toFixed(1) + '" y="' + (H - 2) + '" font-size="10" fill="#4B5563" text-anchor="middle">' + x.label + '</text>' : '';
+  }).join('');
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="Température des dernières 24 heures, de ' + fmt(h[imin].t) + ' à ' + fmt(h[imax].t) + ' °C">' +
+    segs.map(function (sg) { return '<polyline points="' + sg.join(' ') + '" fill="none" stroke="#E07A1F" stroke-width="2.5" stroke-linejoin="round"></polyline>'; }).join('') +
+    pt(imin, BLEU, 16) + pt(imax, ORANGE, -9) + labs + '</svg>';
+}
+function barresMinMax(items, vals) {
+  // items : [{label, min, max}] ; une barre du min au max par jour (ou par mois)
+  var ok2 = items.filter(function (x) { return x.min != null; });
+  if (!ok2.length) { return '<p style="margin:8px 0 0;font-size:13px;color:#4B5563">Pas de données.</p>'; }
+  var lo = Math.min.apply(null, ok2.map(function (x) { return x.min; })), hi = Math.max.apply(null, ok2.map(function (x) { return x.max; }));
+  if (hi - lo < 4) { hi = lo + 4; }
+  var HT = 150, Y = function (v) { return (hi - v) / (hi - lo) * (HT - 34) + 16; };
+  var tous = items.length <= 12, every = items.length > 12 ? 5 : 1;
+  return '<div style="display:flex;gap:' + (tous ? 6 : 2) + 'px;margin-top:8px">' + items.map(function (x, k) {
+    var corps = x.min == null ? '' :
+      (tous ? '<span style="position:absolute;left:-6px;right:-6px;text-align:center;top:' + (Y(x.max) - 16).toFixed(0) + 'px;font-size:11px;font-weight:700;color:' + ORANGE + '">' + fmt(x.max) + '</span>' : '') +
+      '<div style="position:absolute;left:' + (tous ? '25%' : '10%') + ';right:' + (tous ? '25%' : '10%') + ';top:' + Y(x.max).toFixed(0) + 'px;height:' + Math.max(3, Y(x.min) - Y(x.max)).toFixed(0) + 'px;border-radius:5px;background:linear-gradient(#F59E0B,#3B82F6)"></div>' +
+      (tous ? '<span style="position:absolute;left:-6px;right:-6px;text-align:center;top:' + (Y(x.min) + 2).toFixed(0) + 'px;font-size:11px;font-weight:700;color:' + BLEU + '">' + fmt(x.min) + '</span>' : '');
+    return '<div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center">' +
+      '<div style="position:relative;height:' + HT + 'px;width:100%">' + corps + '</div>' +
+      '<span class="lab" style="font-size:10px;height:14px">' + (k % every === 0 ? x.label : '') + '</span></div>';
+  }).join('') + '</div>';
+}
+function vueTemp() {
+  var tv = S.tvue || '7j';
+  return Promise.all([api('api/temp'), tv !== '7j' ? api('api/series') : null]).then(function (r) {
+    if (onglet() !== 'temp') { return; }
+    var t = r[0], se = r[1];
+    var org = function (o) {
+      return o === 'capteur' ? 'capteur' : o === 'station' ? 'Météo-France' : o === 'modele' ? 'estimation AROME' : '';
+    };
+    var mm = function (titre, e) {
+      var l = function (fl, coul, v, h) {
+        return '<div style="display:flex;align-items:baseline;gap:6px"><span style="font-size:13px;color:' + coul + '" aria-hidden="true">' + fl + '</span>' +
+          '<span class="num" style="font-size:22px;font-weight:700;color:' + coul + '">' + fmt(v) + '</span>' +
+          '<span style="font-size:12px;color:#4B5563">°C' + (h ? ' · ' + hm(h) : '') + '</span></div>';
+      };
+      return '<section class="carte" style="display:flex;flex-direction:column;gap:4px"><span style="font-size:13px;color:#4B5563">' + titre + '</span>' +
+        (e ? l('↓', BLEU, e.min, e.heure_min) + l('↑', ORANGE, e.max, e.heure_max) +
+          '<span style="font-size:11px;color:#6B7280">' + org(e.origine) + '</span>' : '<span style="font-size:13px;color:#4B5563">—</span>') + '</section>';
+    };
+    var m = t.maintenant, titre, graph, items;
+    if (tv === '7j') {
+      titre = '7 derniers jours';
+      items = t.j7.map(function (x) { var d = dt(x.date); return { label: J[d.getDay()] + ' ' + d.getDate(), min: x.min, max: x.max }; });
+    } else {
+      var T = se.temp_jours || {}, auj = se.bornes.max;
+      if (tv === '30j') {
+        titre = '30 derniers jours';
+        items = [];
+        for (var i = 29; i >= 0; i--) {
+          var d = plus(auj, -i), o = T[d];
+          items.push({ label: dt(d).getDate() + '/' + (dt(d).getMonth() + 1), min: o ? o[0] : null, max: o ? o[1] : null });
+        }
+      } else {
+        titre = '12 derniers mois · moyennes';
+        items = [];
+        var y = +auj.slice(0, 4), mo = +auj.slice(5, 7);
+        for (var k = 11; k >= 0; k--) {
+          var yy = y, mm2 = mo - k;
+          while (mm2 < 1) { mm2 += 12; yy--; }
+          var pref = yy + '-' + pad(mm2), mins = [], maxs = [];
+          Object.keys(T).forEach(function (dd) { if (dd.slice(0, 7) === pref) { mins.push(T[dd][0]); maxs.push(T[dd][1]); } });
+          var moy = function (a) { return a.length ? r1(a.reduce(function (s2, v) { return s2 + v; }, 0) / a.length) : null; };
+          items.push({ label: ML[mm2 - 1], min: moy(mins), max: moy(maxs) });
+        }
+      }
+    }
+    var pill = function (v, txt) {
+      return '<button type="button" class="pill" data-tvue="' + v + '"' + (tv === v ? ' aria-pressed="true" style="border-color:#1D4ED8;color:#1D4ED8;font-weight:600"' : '') + '>' + txt + '</button>';
+    };
+    $('vue').innerHTML =
+      '<section class="carte" style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">' +
+      '<div style="display:flex;flex-direction:column"><span style="font-size:13px;color:#4B5563">Maintenant</span>' +
+      '<span class="num" style="font-size:40px;font-weight:700;color:#111827">' + (m ? fmt(m.t) : '—') + ' <span style="font-size:18px;font-weight:500;color:#4B5563">°C</span></span></div>' +
+      '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:13px;color:#4B5563">' +
+      (m ? '<span>' + (m.origine === 'capteur' ? 'relevé à ' : 'estimé à ') + m.heure.slice(11, 16) + '</span>' : '') +
+      (m && m.humidite != null ? '<span>humidité ' + m.humidite + ' %</span>' : '') +
+      (m ? '<span style="font-size:11px;color:#6B7280">' + org(m.origine) + '</span>' : '') + '</div></section>' +
+      '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">' + mm("Aujourd'hui", t.aujourdhui) + mm('Hier', t.hier) + '</div>' +
+      '<section class="carte" aria-labelledby="t-24"><div class="entete"><h2 id="t-24" class="t">Dernières 24 heures</h2><span style="font-size:13px;color:#4B5563">°C</span></div>' + courbe24(t.h24) + '</section>' +
+      '<section class="carte" aria-labelledby="t-mm"><div class="entete"><h2 id="t-mm" class="t">' + titre + '</h2><span style="font-size:13px;color:#4B5563">min / max</span></div>' + barresMinMax(items) + '</section>' +
+      '<div style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap">' + pill('7j', '7 j') + pill('30j', '30 j') + pill('1an', '1 an') +
+      '<button type="button" class="pill" id="temp-csv">CSV</button></div>' +
+      '<p style="margin:0;font-size:12px;color:#6B7280;text-align:center">' +
+      (t.source.capteur_depuis ? 'Capteur depuis le ' + court(t.source.capteur_depuis) + ' · ' : 'Capteur pas encore branché · ') +
+      'avant : Météo-France ' + esc(t.source.station_nom || '') + ', puis AROME. Journée de minuit à minuit.</p>';
+    document.querySelectorAll('[data-tvue]').forEach(function (b) {
+      b.onclick = function () { S.tvue = b.dataset.tvue; vueTemp().then(ok).catch(erreur); };
+    });
+    $('temp-csv').onclick = function () {
+      api('api/series').then(function (s2) {
+        var T2 = s2.temp_jours || {}, ks = Object.keys(T2).sort();
+        var lignes = ['date;tmin;tmax;source'].concat(ks.map(function (k) {
+          return k + ';' + T2[k][0].toFixed(1).replace('.', ',') + ';' + T2[k][1].toFixed(1).replace('.', ',') + ';' + T2[k][2];
+        }));
+        var lien = URL.createObjectURL(new Blob([lignes.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' }));
+        var a2 = document.createElement('a');
+        a2.href = lien; a2.download = 'temperatures_' + (ks[0] || '') + '_' + (ks[ks.length - 1] || '') + '.csv';
+        document.body.appendChild(a2); a2.click(); a2.remove();
+        setTimeout(function () { URL.revokeObjectURL(lien); }, 5000);
+      }).catch(erreur);
+    };
+  });
+}
+
 // ---------- Semis ----------
-function vueSemis(donnees) {
-  var p = donnees ? Promise.resolve(donnees) : api('api/semis');
-  return p.then(function (r) {
+function calculeSemis(raw, se) {
+  var auj = raw.aujourdhui, J = se.jours, T = se.temp_jours || {}, B = se.bornes;
+  return raw.semis.map(function (x) {
+    var y = { id: x.id, culture: x.culture, date: x.date, objectif: x.objectif };
+    y.jours = Math.round((dt(auj) - dt(x.date)) / 864e5);
+    y.cumul = x.date >= B.min ? r1(Object.keys(J).reduce(function (t, k) { return k >= x.date && k <= auj ? t + J[k] : t; }, 0)) : null;
+    var dj = 0, n = 0, manque = 0, d = x.date;
+    while (d <= auj) { var o = T[d]; if (o) { dj += djour(x.culture, o[0], o[1]); n++; } else { manque++; } d = plus(d, 1); }
+    y.dj = n ? Math.round(dj) : null;
+    y.manque = manque;
+    return y;
+  });
+}
+function vueSemis() {
+  return Promise.all([api('api/semis'), api('api/series')]).then(function (r) {
     if (onglet() !== 'semis') { return; }
-    if (!S.dSemis) { S.dSemis = r.aujourdhui; }
-    var rows = r.semis.map(function (x) {
+    var raw = r[0], liste = calculeSemis(raw, r[1]);
+    if (!S.dSemis) { S.dSemis = raw.aujourdhui; }
+    var rows = liste.map(function (x) {
       var d = dt(x.date);
       var dTxt = d.getDate() + ' ' + M[d.getMonth()] + ' ' + d.getFullYear();
       var ago = x.jours > 0 ? ('il y a ' + x.jours + ' j') : (x.jours === 0 ? "aujourd'hui" : 'à venir');
-      return '<li style="display:flex;align-items:center;gap:10px;padding:12px 6px 12px 14px;background:#FFFFFF;border:1px solid #E5E8EE;border-radius:14px">' +
+      var b = baseDJ(x.culture), pct = x.objectif && x.dj != null ? Math.min(100, Math.round(x.dj / x.objectif * 100)) : null;
+      return '<li style="display:flex;flex-direction:column;gap:8px;padding:12px 6px 12px 14px;background:#FFFFFF;border:1px solid #E5E8EE;border-radius:14px">' +
+        '<div style="display:flex;align-items:center;gap:10px">' +
         '<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><span style="font-size:16px;font-weight:600">' + esc(x.culture) + '</span>' +
         '<span style="font-size:13px;color:#4B5563">semé le ' + dTxt + ' · ' + ago + '</span></div>' +
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:0">' +
         '<span class="num" style="font-size:22px;font-weight:700;color:#1D4ED8">' + (x.cumul == null ? '—' : fmt(x.cumul)) + ' <span style="font-size:13px;font-weight:500;color:#4B5563">mm</span></span>' +
         '<span style="font-size:11px;color:#4B5563">depuis le semis</span></div>' +
         '<button type="button" data-suppr="' + esc(x.id) + '" aria-label="Supprimer ' + esc(x.culture) + ' semé le ' + dTxt + '" style="width:44px;height:44px;flex:none;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:10px;background:transparent;color:#6B7280;cursor:pointer">' +
-        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></li>';
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div>' +
+        '<div style="display:flex;align-items:center;gap:8px;padding-right:8px">' +
+        '<span class="num" style="font-size:16px;font-weight:700;color:' + ORANGE + ';white-space:nowrap">' + (x.dj == null ? '—' : entier(x.dj)) + ' °Cj</span>' +
+        (pct != null
+          ? '<div role="progressbar" aria-valuenow="' + pct + '" aria-valuemin="0" aria-valuemax="100" aria-label="Avancement vers ' + x.objectif + ' °Cj" style="flex:1;height:8px;background:#F1F3F7;border-radius:4px;overflow:hidden"><div style="width:' + pct + '%;height:100%;background:#E07A1F"></div></div>' +
+            '<span class="num" style="font-size:12px;color:#374151;white-space:nowrap">' + pct + ' % de ' + entier(x.objectif) + '</span>'
+          : '<span style="flex:1;font-size:12px;color:#6B7280">base ' + b[0] + ' °C' + (b[1] ? ', plafond ' + b[1] + ' °C' : '') + '</span>') +
+        '<button type="button" class="pill" data-obj="' + esc(x.id) + '" data-val="' + (x.objectif || '') + '" style="min-height:36px;min-width:0;padding:0 10px;font-size:12px">Objectif</button></div>' +
+        (x.manque && x.dj != null ? '<span style="font-size:11px;color:#6B7280">' + x.manque + ' jour' + (x.manque > 1 ? 's' : '') + ' sans relevé de température non comptés</span>' : '') +
+        '</li>';
     }).join('');
-    var options = r.cultures.map(function (c) {
+    var options = raw.cultures.map(function (c) {
       return '<option value="' + esc(c) + '"' + (c === S.culture ? ' selected' : '') + '>' + esc(c) + '</option>';
     }).join('');
     $('vue').innerHTML =
-      '<p style="margin:0;font-size:14px;color:#374151">Pluie cumulée depuis chaque date de semis, jour du semis compris.</p>' +
-      '<ul aria-label="Semis enregistrés" style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:470px;overflow-y:auto">' + rows + '</ul>' +
+      '<p style="margin:0;font-size:14px;color:#374151">Pluie et somme des températures (degrés-jours) depuis chaque semis, jour du semis compris.</p>' +
+      '<ul aria-label="Semis enregistrés" style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:520px;overflow-y:auto">' + rows + '</ul>' +
       (rows ? '' : '<p style="margin:0;font-size:14px;color:#4B5563;text-align:center">Aucun semis enregistré.</p>') +
       '<section class="carte" aria-labelledby="t-add" style="display:flex;flex-direction:column;gap:10px"><h2 id="t-add" class="t">Ajouter un semis</h2>' +
       '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">' +
       '<div style="display:flex;flex-direction:column;gap:4px"><label for="semis-culture" style="font-size:12px;color:#4B5563">Culture</label>' +
       '<select id="semis-culture" class="champ" style="padding:0 10px">' + options + '</select></div>' +
       '<div style="display:flex;flex-direction:column;gap:4px"><label for="semis-date" style="font-size:12px;color:#4B5563">Date de semis</label>' +
-      '<input id="semis-date" class="champ" type="date" value="' + S.dSemis + '" max="' + r.aujourdhui + '" style="padding:0 10px"></div></div>' +
+      '<input id="semis-date" class="champ" type="date" value="' + S.dSemis + '" max="' + raw.aujourdhui + '" style="padding:0 10px"></div>' +
+      '<div style="grid-column:1 / -1;display:flex;flex-direction:column;gap:4px"><label for="semis-obj" style="font-size:12px;color:#4B5563">Objectif en degrés-jours (facultatif, ex. somme semis → maturité de la variété)</label>' +
+      '<input id="semis-obj" class="champ" type="number" inputmode="numeric" min="1" max="5000" step="10" value="' + (S.obj || '') + '" placeholder="ex. 1750" style="padding:0 10px"></div></div>' +
       '<button type="button" id="semis-ajout" style="min-height:44px;border:0;border-radius:12px;background:#1D4ED8;color:#FFFFFF;font-size:15px;font-weight:600;cursor:pointer">Ajouter</button></section>';
 
     $('semis-culture').onchange = function (e) { S.culture = e.target.value; };
     $('semis-date').onchange = function (e) { S.dSemis = e.target.value; };
+    $('semis-obj').oninput = function (e) { S.obj = e.target.value; };
     var envoi = function (methode, url, corps) {
       return api(url, { method: methode, headers: { 'Content-Type': 'application/json' }, body: corps ? JSON.stringify(corps) : undefined })
-        .then(function (r2) { ok(); return vueSemis(r2); }).catch(erreur);
+        .then(function () { ok(); if (methode === 'POST') { S.obj = ''; } return vueSemis(); }).catch(erreur);
     };
-    $('semis-ajout').onclick = function () { envoi('POST', 'api/semis', { culture: S.culture, date: S.dSemis }); };
+    var nombre = function (v) { v = String(v || '').trim(); return v === '' ? null : Number(v.replace(',', '.')); };
+    $('semis-ajout').onclick = function () {
+      envoi('POST', 'api/semis', { culture: S.culture, date: S.dSemis, objectif: nombre(S.obj) });
+    };
     document.querySelectorAll('[data-suppr]').forEach(function (b) {
       b.onclick = function () { envoi('DELETE', 'api/semis?id=' + encodeURIComponent(b.dataset.suppr)); };
+    });
+    document.querySelectorAll('[data-obj]').forEach(function (b) {
+      b.onclick = function () {
+        var v = window.prompt('Objectif en degrés-jours (vide pour l\'enlever) :', b.dataset.val);
+        if (v === null) { return; }
+        envoi('PUT', 'api/semis', { id: b.dataset.obj, objectif: nombre(v) });
+      };
     });
   });
 }
 
 // ---------- Navigation ----------
-var VUES = { mesures: vueMesures, jour: vueJour, historique: vueHistorique, semis: vueSemis };
+var VUES = { mesures: vueMesures, temp: vueTemp, jour: vueJour, historique: vueHistorique, semis: vueSemis };
 function affiche() {
   nav();
   var o = onglet();

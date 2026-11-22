@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pluviomètre</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;background:#F4F6F9}
+button,input,select{font-family:inherit}
+a{color:#1D4ED8}a:hover{color:#1E3A8A}
+button:disabled{cursor:default;opacity:.45}
+#app{max-width:430px;min-height:100vh;margin:0 auto;position:relative;background:#F4F6F9;color:#111827;font-family:Inter,system-ui,sans-serif;padding:20px 16px 24px;display:flex;flex-direction:column;gap:12px}
+.vue{display:contents}
+.carte{background:#FFFFFF;border:1px solid #E5E8EE;border-radius:16px;padding:14px}
+.col{display:flex;flex-direction:column}
+.entete{display:flex;justify-content:space-between;align-items:baseline}
+h2.t{margin:0;font-size:15px;font-weight:600}
+.doux{color:#4B5563}
+.tab{display:flex;align-items:center;justify-content:center;min-height:44px;border-radius:10px;color:#374151;font-size:14px;font-weight:500;text-decoration:none}
+.tab.on{background:#FFFFFF;color:#1D4ED8;font-weight:600;box-shadow:0 1px 2px rgba(17,24,39,.08)}
+.graph{display:flex;align-items:flex-end}
+.bc{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center}
+.vert{writing-mode:vertical-rl;transform:rotate(180deg);font-size:10px;line-height:1;font-weight:600;color:#1E3A8A;white-space:nowrap}
+.lab{margin-top:2px;color:#4B5563;white-space:nowrap}
+.seg{display:flex;gap:4px;padding:3px;background:#F1F3F7;border-radius:12px}
+.seg button{min-height:44px;padding:0 10px;border:0;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer;background:transparent;color:#4B5563}
+.pill{min-height:44px;min-width:56px;padding:0 12px;border:1px solid #CBD2DC;border-radius:22px;background:#FFFFFF;color:#374151;font-size:13px;font-weight:500;cursor:pointer}
+.champ{min-height:44px;width:100%;border:1px solid #CBD2DC;border-radius:10px;background:#FFFFFF;color:#111827;font-size:15px}
+.gris{background:#F4F6F9;border-radius:10px}
+.num{font-variant-numeric:tabular-nums}
+.err{margin:0;padding:10px 12px;background:#FEF2F2;border:1px solid #FECACA;border-radius:12px;color:#991B1B;font-size:13px}
+</style>
+</head>
+<body>
+<div id="app">
+<header style="display:flex;flex-direction:column;gap:4px">
+<div class="entete">
+<h1 style="margin:0;font-size:24px;font-weight:700;letter-spacing:-0.01em">Pluviomètre</h1>
+<span style="display:flex;align-items:baseline;gap:10px"><span style="font-size:13px;font-weight:600;color:#4B5563">THIBO</span><button type="button" id="deco" hidden style="min-height:32px;padding:0 10px;border:1px solid #CBD2DC;border-radius:8px;background:#FFFFFF;color:#374151;font-size:12px;cursor:pointer">Déconnexion</button></span>
+</div>
+<p id="maj" style="margin:0;font-size:13px;color:#4B5563">…</p>
+</header>
+<nav id="nav" aria-label="Onglets" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;padding:4px;background:#E6E9EF;border-radius:14px"></nav>
+<p id="err" class="err" role="alert" hidden></p>
+<div id="vue" class="vue"></div>
+</div>
+<script>
+'use strict';
+var J = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
+var M = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+var ML = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+var MOIS_LONG = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+var ONGLETS = [['mesures', 'Mesures'], ['jour', 'Jour'], ['historique', 'Historique'], ['semis', 'Semis']];
+var S = { seuil: null, range: '', jour: null, annee: null, du: null, au: null, csv: false, culture: 'Blé', dSemis: null };
+var $ = function (id) { return document.getElementById(id); };
+
+function fmt(v) { return (Math.round(v * 10) / 10).toFixed(1).replace('.', ','); }
+function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
+function dt(iso) { var p = iso.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); }
+function pad(n) { return n < 10 ? '0' + n : '' + n; }
+function iso(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+function plus(isoD, n) { var d = dt(isoD); d.setDate(d.getDate() + n); return iso(d); }
+function court(isoD) { var d = dt(isoD); return d.getDate() + ' ' + M[d.getMonth()]; }
+function apiHttp(url, opt) {
+  return fetch(url, opt).then(function (r) {
+    return r.json().then(function (j) {
+      if (!r.ok) { throw new Error(j.erreur || ('HTTP ' + r.status)); }
+      return j;
+    });
+  });
+}
+
+// ---------- Mode en ligne (GitHub Pages + Firebase) ----------
+// Sur le Raspberry (port 8090), la page interroge le serveur. En ligne, elle lit ce que le Raspberry publie
+// dans Firebase (pluviometre/vues) et enregistre les semis dans pluviometre/semis. Accès réservé par les règles.
+var FB = /\.github\.io$/.test(location.hostname) || /[?&]firebase\b/.test(location.search);
+var FB_CONFIG = {
+  apiKey: 'AIzaSyDOilyX1JmD_nuPkC6JE7QW_GhBcdKcM0I',
+  authDomain: 'enrouleur-eda1f.firebaseapp.com',
+  databaseURL: 'https://enrouleur-eda1f-default-rtdb.europe-west1.firebasedatabase.app',
+  projectId: 'enrouleur-eda1f',
+  appId: '1:1028823014289:web:68da82933d870698ff9830'
+};
+var FB_SDK = 'https://www.gstatic.com/firebasejs/10.12.2/firebase-';
+var CULTURES = ['Blé', "Orge d'hiver", 'Orge de printemps', 'Colza', 'Betterave', 'Pomme de terre', 'Maïs', 'Féverole', 'Pois'];
+var fbDb = null, FB_MAJ = null;
+
+function r1(v) { return Math.round(v * 10 + 1e-7) / 10; }
+function fbErr(e) {
+  var m = (e && (e.code || e.message)) || String(e);
+  if (/permission/i.test(m)) { return new Error('accès refusé (compte non autorisé ou déconnecté)'); }
+  return e instanceof Error ? e : new Error(m);
+}
+function fbLit(chemin) {
+  return fbDb.ref('pluviometre/' + chemin).once('value').then(function (s) { return s.val(); }, function (e) { throw fbErr(e); });
+}
+function fbVue(chemin) {
+  return fbLit('vues/' + chemin).then(function (t) {
+    if (t == null) { throw new Error('pas encore de données publiées par le Raspberry (' + chemin + ')'); }
+    return JSON.parse(t);
+  });
+}
+function fbPeriode(du, au, J, B) {
+  var a = du, b = au, t;
+  if (!/^\d{4}-\d\d-\d\d$/.test(a) || !/^\d{4}-\d\d-\d\d$/.test(b)) { throw new Error('date invalide (AAAA-MM-JJ)'); }
+  if (a > b) { t = a; a = b; b = t; }
+  if ((dt(b) - dt(a)) / 864e5 > 3700) { throw new Error('période trop longue'); }
+  var jours = [], d = a, mx = null;
+  while (d <= b) { jours.push({ date: d, mm: r1(J[d] || 0) }); d = plus(d, 1); }
+  jours.forEach(function (x) { if (!mx || x.mm > mx.mm) { mx = x; } });
+  return {
+    du: a, au: b, min: B.min, max: B.max, jours: jours, n: jours.length,
+    total: r1(jours.reduce(function (s, x) { return s + x.mm; }, 0)),
+    jours_pluie: jours.filter(function (x) { return x.mm > 0; }).length,
+    max_mm: mx.mm, max_date: mx.mm > 0 ? mx.date : null
+  };
+}
+function fbSemis() {
+  return Promise.all([fbLit('semis'), fbVue('jours'), fbVue('bornes')]).then(function (r) {
+    var s = r[0] || {}, J = r[1], B = r[2], auj = iso(new Date());
+    var liste = Object.keys(s).map(function (k) { return { id: k, culture: s[k].culture, date: s[k].date }; });
+    liste.sort(function (x, y) { return x.date < y.date ? 1 : x.date > y.date ? -1 : (x.id < y.id ? 1 : -1); });
+    liste.forEach(function (x) {
+      x.jours = Math.round((dt(auj) - dt(x.date)) / 864e5);
+      x.cumul = x.date >= B.min ? r1(Object.keys(J).reduce(function (t, k) { return k >= x.date && k <= auj ? t + J[k] : t; }, 0)) : null;
+    });
+    return { aujourdhui: auj, cultures: CULTURES, semis: liste };
+  });
+}
+function apiFB(url, opt) {
+  var u = new URL(url, location.href), q = u.searchParams, quoi = u.pathname.replace(/^.*\/api\//, '');
+  var methode = (opt && opt.method) || 'GET';
+  var maj = fbLit('vues/maj').then(function (m) { FB_MAJ = m; }, function () {});
+  var p;
+  if (quoi === 'etat') { p = fbVue('etat'); }
+  else if (quoi === 'resume') { p = fbVue('resume/' + (q.get('seuil') ? 's' + q.get('seuil') : 'defaut')); }
+  else if (quoi === 'detail') { p = fbVue('detail/' + q.get('vue')); }
+  else if (quoi === 'jour') {
+    p = fbVue('bornes').then(function (B) {
+      var d = q.get('date') || B.max;
+      return fbVue('jour/' + d).catch(function () { throw new Error('pas de données pour le ' + d); }).then(function (x) {
+        x.min = B.min; x.max = B.max; x.heure_actuelle = d === iso(new Date()) ? new Date().getHours() : null;
+        return x;
+      });
+    });
+  }
+  else if (quoi === 'annee') {
+    p = fbVue('bornes').then(function (B) { return fbVue('annee/' + (q.get('annee') || B.max.slice(0, 4))); });
+  }
+  else if (quoi === 'periode') {
+    p = Promise.all([fbVue('jours'), fbVue('bornes')]).then(function (r) { return fbPeriode(q.get('du'), q.get('au'), r[0], r[1]); });
+  }
+  else if (quoi === 'semis' && methode === 'GET') { p = fbSemis(); }
+  else if (quoi === 'semis' && methode === 'POST') {
+    var c = JSON.parse(opt.body || '{}'), auj = iso(new Date());
+    if (CULTURES.indexOf(c.culture) < 0) { return Promise.reject(new Error('culture inconnue')); }
+    if (!/^20\d\d-\d\d-\d\d$/.test(c.date || '') || c.date > auj) { return Promise.reject(new Error('date hors limites')); }
+    p = fbDb.ref('pluviometre/semis').push({ culture: c.culture, date: c.date }).then(fbSemis, function (e) { throw fbErr(e); });
+  }
+  else if (quoi === 'semis' && methode === 'DELETE') {
+    var id = q.get('id') || '';
+    if (!/^[-\w]{1,64}$/.test(id)) { return Promise.reject(new Error('semis inconnu')); }
+    p = fbDb.ref('pluviometre/semis/' + id).remove().then(fbSemis, function (e) { throw fbErr(e); });
+  }
+  else { return Promise.reject(new Error('introuvable')); }
+  return Promise.all([p, maj]).then(function (r) { return r[0]; });
+}
+function api(url, opt) { return FB ? apiFB(url, opt) : apiHttp(url, opt); }
+function erreur(e) { var el = $('err'); el.hidden = false; el.textContent = 'Erreur : ' + (e && e.message ? e.message : e); }
+function ok() { $('err').hidden = true; }
+
+// ---------- En-tête et onglets ----------
+function onglet() { var h = location.hash.replace('#', ''); return ONGLETS.some(function (o) { return o[0] === h; }) ? h : 'mesures'; }
+function nav() {
+  var cur = onglet();
+  $('nav').innerHTML = ONGLETS.map(function (o) {
+    return o[0] === cur
+      ? '<span class="tab on" aria-current="page">' + o[1] + '</span>'
+      : '<a class="tab" href="#' + o[0] + '">' + o[1] + '</a>';
+  }).join('');
+}
+function entete(der, src) {
+  var t;
+  if (!der) {
+    t = 'Aucune trame reçue';
+    if (src && src.station_nom) {
+      t = 'Pluie Météo-France : ' + src.station_nom + (src.station_km != null ? ' (' + fmt(src.station_km).replace(/,0$/, '') + ' km)' : '') +
+        (src.mesures_jusquau ? ' jusqu\'au ' + dt(src.mesures_jusquau).getDate() + '/' + (dt(src.mesures_jusquau).getMonth() + 1) : '') +
+        ', puis estimation AROME · pluviomètre pas encore branché';
+    }
+  } else {
+    var heure = der.local.slice(11, 16);
+    var j = der.local.slice(0, 10);
+    t = (j === iso(new Date()) ? 'Mis à jour à ' + heure : 'Mis à jour le ' + dt(j).getDate() + '/' + (dt(j).getMonth() + 1) + ' à ' + heure);
+    if (der.batterie != null) { t += ' · pile ' + fmt(der.batterie) + ' V'; }
+    if (der.signal) { t += ' · signal ' + der.signal; }
+  }
+  if (FB && FB_MAJ) {
+    var age = (Date.now() - new Date(FB_MAJ).getTime()) / 60000;
+    if (age > 20) {
+      t += ' · ⚠ Raspberry sans nouvelles depuis ' + (age < 120 ? Math.round(age) + ' min' : age < 2880 ? Math.round(age / 60) + ' h' :
+        'le ' + dt(FB_MAJ.slice(0, 10)).getDate() + '/' + (dt(FB_MAJ.slice(0, 10)).getMonth() + 1));
+    }
+  }
+  $('maj').textContent = t;
+}
+function rafraichitEntete() { return api('api/etat').then(function (e) { entete(e.derniere, e.source); }); }
+
+// ---------- Barres ----------
+function barres(list, o) {
+  // list : [{txt, h, bg, label, tc}] ; o : {gap, height, radius, vertical, txtSize, labSize, labH, colGap}
+  return '<div role="img" aria-label="' + esc(o.aria || '') + '" class="graph" style="gap:' + o.gap + 'px;height:' + o.height + 'px' + (o.mt ? ';margin-top:' + o.mt + 'px' : '') + '">' +
+    list.map(function (d) {
+      var txt = o.vertical
+        ? '<span class="vert">' + d.txt + '</span>'
+        : '<span style="font-size:' + o.txtSize + 'px;font-weight:700;color:' + (d.tc || '#1E3A8A') + ';font-variant-numeric:tabular-nums;white-space:nowrap">' + d.txt + '</span>';
+      return '<div class="bc" style="gap:' + o.colGap + 'px">' + txt +
+        '<div style="width:100%;height:' + d.h + 'px;background:' + d.bg + ';border-radius:' + o.radius + '"></div>' +
+        (o.noLab ? '' : '<span class="lab" style="height:' + o.labH + 'px;font-size:' + o.labSize + 'px">' + d.label + '</span>') +
+        '</div>';
+    }).join('') + '</div>';
+}
+function sheetBars(vals, labs, every, hmax, entier) {
+  var mx = 0.0001;
+  vals.forEach(function (v) { if (v > mx) { mx = v; } });
+  return vals.map(function (v, k) {
+    return {
+      txt: v > 0 ? (entier ? String(v) : fmt(v)) : (entier ? '0' : ''),
+      h: v > 0 ? Math.max(4, Math.round(v / mx * hmax)) : 2,
+      bg: v > 0 ? '#2F6FDB' : '#CBD2DC',
+      label: (k % every === 0) ? labs[k] : ''
+    };
+  });
+}
+
+// ---------- Mesures ----------
+function vueMesures() {
+  var seuil = S.seuil ? '?seuil=' + S.seuil : '';
+  return api('api/resume' + seuil).then(function (r) {
+    if (onglet() !== 'mesures') { return; }
+    entete(r.derniere, r.source);
+    S.seuil = r.seche.seuil;
+    var max7 = 0.0001, max30 = 0.0001;
+    r.j7.forEach(function (x) { if (x.mm > max7) { max7 = x.mm; } });
+    r.j30.forEach(function (x) { if (x.mm > max30) { max30 = x.mm; } });
+    var tot7 = 0, tot30 = 0, aria7 = [];
+    var days7 = r.j7.map(function (x) {
+      var v = x.mm, d = dt(x.date);
+      tot7 += v;
+      aria7.push(J[d.getDay()] + ' ' + d.getDate() + ' : ' + fmt(v) + ' mm');
+      return { txt: fmt(v), tc: v > 0 ? '#1E3A8A' : '#6B7280', h: v > 0 ? Math.max(6, Math.round(v / max7 * 118)) : 3,
+        bg: v > 0 ? '#2F6FDB' : '#CBD2DC', label: J[d.getDay()] + ' ' + d.getDate() };
+    });
+    var n30 = r.j30.length;
+    var days30 = r.j30.map(function (x, i) {
+      var v = x.mm, d = dt(x.date);
+      tot30 += v;
+      return { txt: v > 0 ? fmt(v) : '', h: v > 0 ? Math.max(4, Math.round(v / max30 * 104)) : 2,
+        bg: v > 0 ? '#2F6FDB' : '#CBD2DC', label: ((n30 - 1 - i) % 7 === 0) ? (d.getDate() + '/' + (d.getMonth() + 1)) : '' };
+    });
+
+    var s = r.seche, secTxt = '—', secDepuis = 'Aucune période sèche assez longue', secDetail = '';
+    if (s.etat === 'en_cours') {
+      secTxt = '0,0'; secDepuis = 'Période sèche en cours'; secDetail = s.jours + ' jours sans pluie';
+    } else if (s.etat === 'apres') {
+      secTxt = fmt(s.mm);
+      secDepuis = 'depuis le ' + dt(s.depuis).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+      secDetail = 'après ' + s.jours + ' jours sans pluie, du ' + court(s.du) + ' au ' + court(s.au);
+    }
+    function segBtn(v) {
+      var on = s.seuil === v;
+      return '<button type="button" data-seuil="' + v + '" aria-pressed="' + on + '" style="min-width:52px;background:' + (on ? '#FFFFFF' : 'transparent') + ';color:' + (on ? '#9A3412' : '#4B5563') + '">' + v + ' j</button>';
+    }
+
+    var today = iso(new Date());
+    var prevLabels = [new Date().getHours() >= 15 ? 'Cette nuit' : "Aujourd'hui", plus(today, 1), plus(today, 2)].map(function (x, k) {
+      if (k === 0) { return x; }
+      var d = dt(x); return J[d.getDay()] + '. ' + d.getDate();
+    });
+    var prev = prevLabels.map(function (lab, k) {
+      var v = r.previsions ? r.previsions[k].mm : null;
+      return '<div class="gris" style="display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 4px">' +
+        '<span style="font-size:12px;color:#4B5563">' + lab + '</span>' +
+        '<span class="num" style="font-size:17px;font-weight:600">' + (v == null ? '—' : fmt(v) + ' mm') + '</span></div>';
+    }).join('');
+
+    var carte = function (titre, val) {
+      return '<div class="carte" style="padding:12px 14px;display:flex;flex-direction:column;gap:2px">' +
+        '<span style="font-size:12px;color:#4B5563">' + titre + '</span>' +
+        '<span class="num" style="font-size:26px;font-weight:700">' + val + ' <span style="font-size:14px;font-weight:500;color:#4B5563">mm</span></span></div>';
+    };
+
+    $('vue').innerHTML =
+      '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">' + carte("Aujourd'hui", fmt(r.aujourdhui)) + carte('Dernière heure', fmt(r.derniere_heure)) + '</div>' +
+
+      '<section class="carte" aria-labelledby="t-7"><div class="entete"><h2 id="t-7" class="t">7 derniers jours</h2><span style="font-size:13px;color:#4B5563">total ' + fmt(tot7) + ' mm</span></div>' +
+      barres(days7, { gap: 8, height: 186, mt: 10, colGap: 4, txtSize: 14, radius: '6px 6px 2px 2px', labH: 16, labSize: 12, aria: 'Pluie des 7 derniers jours. ' + aria7.join(', ') }) + '</section>' +
+
+      '<section class="carte" aria-labelledby="t-30"><div class="entete"><h2 id="t-30" class="t">30 derniers jours</h2><span style="font-size:13px;color:#4B5563">total ' + fmt(tot30) + ' mm</span></div>' +
+      barres(days30, { gap: 3, height: 168, mt: 10, colGap: 3, vertical: true, radius: '3px 3px 1px 1px', labH: 14, labSize: 10, aria: 'Pluie des 30 derniers jours, total ' + fmt(tot30) + ' mm' }) + '</section>' +
+
+      '<section class="carte" aria-labelledby="t-sec" style="display:flex;flex-direction:column;gap:6px">' +
+      '<h2 id="t-sec" class="t">Depuis la dernière période sèche</h2>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+      '<p class="num" style="margin:0;font-size:30px;font-weight:700;color:#C2410C">' + secTxt + ' <span style="font-size:15px;font-weight:500;color:#4B5563">mm</span></p>' +
+      '<div class="seg" role="group" aria-label="Durée minimale de la période sèche">' + segBtn(7) + segBtn(10) + '</div></div>' +
+      '<p style="margin:0;font-size:14px;color:#374151">' + secDepuis + '</p>' +
+      '<p style="margin:0;font-size:12px;color:#4B5563">' + secDetail + '</p></section>' +
+
+      '<section class="carte" aria-labelledby="t-prev"><div class="entete"><h2 id="t-prev" class="t">Prévisions</h2><span style="font-size:12px;color:#4B5563">Météo-France · AROME</span></div>' +
+      '<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px">' + prev + '</div></section>' +
+
+      '<div style="margin-top:auto;display:flex;justify-content:center;align-items:center;gap:8px">' +
+      '<span style="font-size:12px;color:#4B5563">Voir aussi</span>' +
+      '<button type="button" class="pill" data-range="1h">1 h</button><button type="button" class="pill" data-range="24h">24 h</button><button type="button" class="pill" data-range="1an">1 an</button></div>' +
+      '<div id="volet"></div>';
+
+    document.querySelectorAll('[data-seuil]').forEach(function (b) {
+      b.onclick = function () { S.seuil = +b.dataset.seuil; vueMesures().catch(erreur); };
+    });
+    document.querySelectorAll('[data-range]').forEach(function (b) {
+      b.onclick = function () { S.range = b.dataset.range; volet(); };
+    });
+    if (S.range) { volet(); }
+  });
+}
+
+function volet() {
+  var el = $('volet');
+  if (!el) { return; }
+  if (!S.range) { el.innerHTML = ''; return; }
+  api('api/detail?vue=' + S.range).then(function (r) {
+    if (!S.range || r.vue !== S.range || !$('volet')) { return; }
+    if (!r.barres) {
+      r = { total: 0, barres: [] };
+    }
+    var vals = r.barres.map(function (b) { return S.range === '1an' ? Math.round(b.mm) : b.mm; });
+    var labs = r.barres.map(function (b) { return b.label; });
+    var titre, graph;
+    if (S.range === '1h' && !r.barres.length) {
+      titre = 'Dernière heure';
+      graph = '<p style="margin:0;font-size:14px;color:#4B5563">Le détail par 5 minutes viendra avec le pluviomètre. En attendant, la pluie vient de Météo-France, heure par heure.</p>';
+    } else if (S.range === '1h') {
+      titre = 'Dernière heure · ' + fmt(r.total) + ' mm';
+      graph = barres(sheetBars(vals, labs, 3, 110, false), { gap: 6, height: 160, colGap: 4, txtSize: 11, radius: '4px 4px 1px 1px', labH: 14, labSize: 10, aria: 'Pluie de la dernière heure, par tranches de 5 minutes' });
+    } else if (S.range === '24h') {
+      titre = 'Dernières 24 heures · ' + fmt(r.total) + ' mm';
+      graph = barres(sheetBars(vals, labs, 3, 110, false), { gap: 3, height: 160, colGap: 3, vertical: true, radius: '3px 3px 1px 1px', labH: 14, labSize: 10, aria: 'Pluie des dernières 24 heures, heure par heure' });
+    } else {
+      titre = '12 derniers mois';
+      graph = barres(sheetBars(vals, labs, 1, 110, true), { gap: 6, height: 160, colGap: 4, txtSize: 11, radius: '4px 4px 1px 1px', labH: 14, labSize: 10, aria: 'Pluie des 12 derniers mois, mois par mois' });
+    }
+    $('volet').innerHTML =
+      '<div style="position:fixed;inset:0;z-index:10"><div style="max-width:430px;height:100%;margin:0 auto;display:flex;flex-direction:column;justify-content:flex-end">' +
+      '<button type="button" aria-label="Fermer le volet" data-fermer style="flex:1;margin:0;padding:0;border:0;background:rgba(17,24,39,0.35);cursor:pointer"></button>' +
+      '<section aria-label="Détail de la pluie" style="background:#FFFFFF;border-radius:20px 20px 0 0;padding:16px 16px 28px;box-shadow:0 -8px 24px rgba(17,24,39,0.18);display:flex;flex-direction:column;gap:14px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h2 style="margin:0;font-size:16px;font-weight:600">' + titre + '</h2>' +
+      '<button type="button" data-fermer style="min-height:44px;padding:0 14px;border:1px solid #CBD2DC;border-radius:22px;background:#FFFFFF;color:#374151;font-size:14px;font-weight:500;cursor:pointer">Fermer</button></div>' +
+      graph + '</section></div></div>';
+    document.querySelectorAll('[data-fermer]').forEach(function (b) { b.onclick = function () { S.range = ''; volet(); }; });
+  }).catch(erreur);
+}
+
+// ---------- Jour ----------
+function vueJour() {
+  return api('api/jour' + (S.jour ? '?date=' + S.jour : '')).then(function (r) {
+    if (onglet() !== 'jour') { return; }
+    S.jour = r.date;
+    var parHeure = r.heures != null;
+    var hrs = parHeure ? r.heures : [], mx = 0.0001;
+    hrs.forEach(function (v) { if (v > mx) { mx = v; } });
+    var hours = hrs.map(function (v, h) {
+      var futur = r.heure_actuelle != null && h > r.heure_actuelle;
+      return { txt: v > 0 ? fmt(v) : '', h: v > 0 ? Math.max(4, Math.round(v / mx * 104)) : (futur ? 0 : 2),
+        bg: v > 0 ? '#2F6FDB' : '#CBD2DC', label: (h % 3 === 0) ? (h + 'h') : '' };
+    });
+    var first = -1, lastH = -1, maxH = 0, maxAt = 0, wet = 0;
+    for (var h = 0; h < 24; h++) {
+      if (hrs[h] > 0) { if (first < 0) { first = h; } lastH = h; wet += 1; if (hrs[h] > maxH) { maxH = hrs[h]; maxAt = h; } }
+    }
+    var dateLong = dt(r.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    var detail1 = !parHeure ? (r.total > 0 ? 'Relevé journalier de la station ' + (r.station_nom || 'Météo-France') : 'Aucune pluie ce jour-là') : wet ? ('Pluie de ' + first + 'h à ' + (lastH + 1) + 'h · ' + wet + ' heure' + (wet > 1 ? 's' : '') + ' de pluie') : 'Aucune pluie ce jour-là';
+    var detail2 = !parHeure ? 'de 7h à 7h le lendemain (8h à 8h en été), sans détail par heure' : (r.origine === 'modele' && wet) ? ('Estimation AROME · heure la plus forte : ' + fmt(maxH) + ' mm à ' + maxAt + 'h') : wet ? ('Heure la plus forte : ' + fmt(maxH) + ' mm à ' + maxAt + 'h') : '';
+    var fleche = function (d) { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + d + '"></path></svg>'; };
+    var btn = 'width:44px;height:44px;flex:none;display:flex;align-items:center;justify-content:center;padding:0;border:1px solid #CBD2DC;border-radius:12px;background:#FFFFFF;color:#374151;cursor:pointer';
+    var source = function (nom, v) {
+      return '<div class="gris" style="display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:40px;padding:0 12px">' +
+        '<span style="font-size:14px;color:#374151">' + nom + '</span><span class="num" style="font-size:15px;font-weight:600">' + (v == null ? '—' : fmt(v) + ' mm') + '</span></div>';
+    };
+    $('vue').innerHTML =
+      '<section class="carte" aria-label="Choix du jour" style="display:flex;flex-direction:column;gap:10px">' +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+      '<button type="button" id="j-prev" aria-label="Jour précédent" style="' + btn + '"' + (r.date <= r.min ? ' disabled' : '') + '>' + fleche('M15 6l-6 6 6 6') + '</button>' +
+      '<p style="flex:1;margin:0;text-align:center;font-size:16px;font-weight:600">' + dateLong + '</p>' +
+      '<button type="button" id="j-next" aria-label="Jour suivant" style="' + btn + '"' + (r.date >= r.max ? ' disabled' : '') + '>' + fleche('M9 6l6 6-6 6') + '</button></div>' +
+      '<div style="display:flex;flex-direction:column;gap:4px"><label for="jour-date" style="font-size:12px;color:#4B5563">Choisir une date</label>' +
+      '<input id="jour-date" class="champ" type="date" value="' + r.date + '" min="' + r.min + '" max="' + r.max + '" style="padding:0 12px"></div></section>' +
+
+      '<section class="carte" aria-labelledby="t-total"><h2 id="t-total" class="t">Pluie du jour</h2>' +
+      '<p class="num" style="margin:6px 0 0;font-size:34px;font-weight:700;color:#1D4ED8">' + fmt(r.total) + ' <span style="font-size:16px;font-weight:500;color:#4B5563">mm</span></p>' +
+      '<p style="margin:4px 0 0;font-size:13px;color:#374151">' + detail1 + '</p>' +
+      '<p style="margin:2px 0 0;font-size:13px;color:#374151">' + detail2 + '</p></section>' +
+
+      '<section class="carte" aria-labelledby="t-h"><div class="entete"><h2 id="t-h" class="t">Heure par heure</h2><span style="font-size:12px;color:#4B5563">en mm</span></div>' +
+      (parHeure ? barres(hours, { gap: 3, height: 160, mt: 10, colGap: 3, vertical: true, radius: '3px 3px 1px 1px', labH: 14, labSize: 10, aria: 'Pluie heure par heure, ' + dateLong })
+        : '<p style="margin:10px 0 0;font-size:14px;color:#4B5563">Pas de détail heure par heure : la station Météo-France ne publie qu\'un total par jour.</p>') + '</section>' +
+
+      '<section class="carte" aria-labelledby="t-cmp"><h2 id="t-cmp" class="t">Autres sources ce jour-là</h2>' +
+      '<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">' + source('Station Météo-France (' + (r.station_nom || 'à choisir') + ')', r.meteo_france) + source('Modèle AROME', r.arome) + '</div></section>';
+
+    var aller = function (d) { if (d && d >= r.min && d <= r.max) { S.jour = d; vueJour().catch(erreur); } };
+    $('j-prev').onclick = function () { aller(plus(r.date, -1)); };
+    $('j-next').onclick = function () { aller(plus(r.date, 1)); };
+    $('jour-date').onchange = function (e) {
+      var v = e.target.value;
+      if (/^\d{4}-\d\d-\d\d$/.test(v)) { S.jour = v < r.min ? r.min : v > r.max ? r.max : v; vueJour().catch(erreur); }
+    };
+  });
+}
+
+// ---------- Historique ----------
+function vueHistorique() {
+  var today = iso(new Date());
+  return Promise.all([
+    api('api/annee' + (S.annee ? '?annee=' + S.annee : '')),
+    api('api/periode?du=' + (S.du || plus(today, -16)) + '&au=' + (S.au || today))
+  ]).then(function (res) {
+    if (onglet() !== 'historique') { return; }
+    var a = res[0], p = res[1];
+    S.annee = a.annee; S.du = p.du; S.au = p.au;
+    var prev = a.precedente, mx = 1;
+    a.mois.forEach(function (v) { if (v && v > mx) { mx = v; } });
+    if (prev) { prev.forEach(function (v) { if (v && v > mx) { mx = v; } }); }
+    var months = a.mois.map(function (v, k) {
+      var h = v == null ? 0 : Math.max(4, Math.round(v / mx * 112));
+      var r = prev ? prev[k] : null;
+      var refH = r != null ? Math.round(r / mx * 112) : 0;
+      return '<div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px">' +
+        '<div style="position:relative;width:100%;height:140px">' +
+        '<div style="position:absolute;left:0;right:0;bottom:0;height:' + h + 'px;background:#2F6FDB;border-radius:4px 4px 1px 1px"></div>' +
+        (r != null ? '<div style="position:absolute;left:-2px;right:-2px;bottom:' + refH + 'px;height:0;border-top:2px solid #111827"></div>' : '') +
+        '<span class="num" style="position:absolute;left:-8px;right:-8px;bottom:' + (Math.max(h, refH) + 3) + 'px;text-align:center;font-size:11px;font-weight:700;color:#1E3A8A">' + (v == null ? '' : String(v)) + '</span>' +
+        '</div><span style="font-size:11px;color:#4B5563">' + ML[k] + '</span></div>';
+    }).join('');
+    var auD = dt(a.au);
+    var auCourt = auD.getDate() + ' ' + M[auD.getMonth()];
+    var years = a.annees.map(function (y) {
+      var on = y === a.annee;
+      return '<button type="button" data-annee="' + y + '" aria-pressed="' + on + '" style="min-width:58px;padding:0 8px;background:' + (on ? '#FFFFFF' : 'transparent') + ';color:' + (on ? '#1D4ED8' : '#4B5563') + '">' + y + '</button>';
+    }).join('');
+    var refs = a.refs.map(function (r) {
+      return '<li style="font-size:12px;color:#4B5563">' + (r.en_cours
+        ? r.annee + ' : ' + r.total + ' mm au ' + auCourt + ' (année en cours)'
+        : r.annee + ' : ' + r.meme_date + ' mm au ' + auCourt + ' · ' + r.total + " mm sur l'année") + '</li>';
+    }).join('');
+    var suffix = a.en_cours ? 'au ' + auD.getDate() + ' ' + MOIS_LONG[auD.getMonth()] : "sur l'année";
+
+    var vertical = p.n <= 31, mxv = Math.max(p.max_mm, 0.0001);
+    var rbars = p.jours.map(function (x) {
+      var v = x.mm;
+      return { txt: vertical && v > 0 ? fmt(v) : '', h: v > 0 ? Math.max(3, Math.round(v / mxv * 96)) : 2, bg: v > 0 ? '#2F6FDB' : '#CBD2DC' };
+    });
+    var stat = function (titre, val, sous, couleur) {
+      return '<div class="gris" style="display:flex;flex-direction:column;gap:2px;padding:8px 10px">' +
+        '<span style="font-size:12px;color:#4B5563">' + titre + '</span>' +
+        '<span class="num" style="font-size:19px;font-weight:700' + (couleur ? ';color:' + couleur : '') + '">' + val + '</span>' +
+        (sous != null ? '<span style="font-size:11px;color:#4B5563">' + sous + '</span>' : '') + '</div>';
+    };
+    var champDate = function (id, lab, val) {
+      return '<div style="display:flex;flex-direction:column;gap:4px"><label for="' + id + '" style="font-size:12px;color:#4B5563">' + lab + '</label>' +
+        '<input id="' + id + '" class="champ" type="date" value="' + val + '" min="' + p.min + '" max="' + p.max + '" style="padding:0 10px"></div>';
+    };
+
+    $('vue').innerHTML =
+      '<section class="carte" aria-labelledby="t-an" style="display:flex;flex-direction:column;gap:10px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><h2 id="t-an" class="t">Par année</h2>' +
+      '<div class="seg" role="group" aria-label="Année" style="flex-wrap:wrap">' + years + '</div></div>' +
+      '<p class="num" style="margin:0;font-size:32px;font-weight:700;color:#1D4ED8">' + a.total + ' <span style="font-size:15px;font-weight:500;color:#4B5563">mm ' + suffix + '</span></p>' +
+      '<ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px">' + refs + '</ul>' +
+      '<div role="img" aria-label="Pluie mois par mois en ' + a.annee + (prev ? ', avec ' + (a.annee - 1) + ' en repère' : '') + '" style="display:flex;align-items:flex-end;gap:6px;margin-top:4px">' + months + '</div>' +
+      (prev ? '<div style="display:flex;align-items:center;gap:16px;font-size:12px;color:#4B5563">' +
+        '<span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:3px;background:#2F6FDB"></span>' + a.annee + '</span>' +
+        '<span style="display:flex;align-items:center;gap:6px"><span style="width:16px;height:0;border-top:2px solid #111827"></span>' + (a.annee - 1) + '</span></div>' : '') +
+      '</section>' +
+
+      '<section class="carte" aria-labelledby="t-per" style="display:flex;flex-direction:column;gap:10px">' +
+      '<h2 id="t-per" class="t">Entre deux dates</h2>' +
+      '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">' + champDate('date-du', 'Du', p.du) + champDate('date-au', 'Au', p.au) + '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">' +
+      stat('Total', fmt(p.total) + ' mm', null, '#1D4ED8') + stat('Jours de pluie', p.jours_pluie + ' / ' + p.n) +
+      stat('Jour le plus fort', fmt(p.max_mm) + ' mm', p.max_date ? 'le ' + court(p.max_date) : '—') + '</div>' +
+      barres(rbars, { gap: 2, height: 130, colGap: 3, vertical: true, radius: '2px 2px 0 0', noLab: true, aria: 'Pluie jour par jour du ' + court(p.du) + ' au ' + court(p.au) + ', total ' + fmt(p.total) + ' mm' }) +
+      '<div style="display:flex;justify-content:space-between;font-size:11px;color:#4B5563"><span>' + court(p.du) + '</span><span>' + court(p.au) + '</span></div>' +
+      '<button type="button" id="csv" style="min-height:44px;display:flex;align-items:center;justify-content:center;gap:8px;border:1px solid #1D4ED8;border-radius:12px;background:#FFFFFF;color:#1D4ED8;font-size:15px;font-weight:600;cursor:pointer">' +
+      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"></path><path d="M7 10l5 5 5-5"></path><path d="M5 20h14"></path></svg>Exporter en CSV</button>' +
+      (S.csv ? '<p role="status" style="margin:0;font-size:12px;color:#374151">pluie_' + p.du + '_' + p.au + '.csv · ' + p.n + ' lignes (date ; pluie en mm).</p>' : '') +
+      '</section>';
+
+    document.querySelectorAll('[data-annee]').forEach(function (b) {
+      b.onclick = function () { S.annee = +b.dataset.annee; vueHistorique().catch(erreur); };
+    });
+    var setD = function (cle) {
+      return function (e) {
+        var v = e.target.value;
+        if (/^\d{4}-\d\d-\d\d$/.test(v)) { S[cle] = v < p.min ? p.min : v > p.max ? p.max : v; S.csv = false; vueHistorique().catch(erreur); }
+      };
+    };
+    $('date-du').onchange = setD('du');
+    $('date-au').onchange = setD('au');
+    $('csv').onclick = function () {
+      var lignes = ['date;pluie_mm'].concat(p.jours.map(function (x) { return x.date + ';' + x.mm.toFixed(1).replace('.', ','); }));
+      var lien = URL.createObjectURL(new Blob([lignes.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' }));
+      var a2 = document.createElement('a');
+      a2.href = lien;
+      a2.download = 'pluie_' + p.du + '_' + p.au + '.csv';
+      document.body.appendChild(a2); a2.click(); a2.remove();
+      setTimeout(function () { URL.revokeObjectURL(lien); }, 5000);
+      S.csv = true; vueHistorique().catch(erreur);
+    };
+  });
+}
+
+// ---------- Semis ----------
+function vueSemis(donnees) {
+  var p = donnees ? Promise.resolve(donnees) : api('api/semis');
+  return p.then(function (r) {
+    if (onglet() !== 'semis') { return; }
+    if (!S.dSemis) { S.dSemis = r.aujourdhui; }
+    var rows = r.semis.map(function (x) {
+      var d = dt(x.date);
+      var dTxt = d.getDate() + ' ' + M[d.getMonth()] + ' ' + d.getFullYear();
+      var ago = x.jours > 0 ? ('il y a ' + x.jours + ' j') : (x.jours === 0 ? "aujourd'hui" : 'à venir');
+      return '<li style="display:flex;align-items:center;gap:10px;padding:12px 6px 12px 14px;background:#FFFFFF;border:1px solid #E5E8EE;border-radius:14px">' +
+        '<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><span style="font-size:16px;font-weight:600">' + esc(x.culture) + '</span>' +
+        '<span style="font-size:13px;color:#4B5563">semé le ' + dTxt + ' · ' + ago + '</span></div>' +
+        '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:0">' +
+        '<span class="num" style="font-size:22px;font-weight:700;color:#1D4ED8">' + (x.cumul == null ? '—' : fmt(x.cumul)) + ' <span style="font-size:13px;font-weight:500;color:#4B5563">mm</span></span>' +
+        '<span style="font-size:11px;color:#4B5563">depuis le semis</span></div>' +
+        '<button type="button" data-suppr="' + esc(x.id) + '" aria-label="Supprimer ' + esc(x.culture) + ' semé le ' + dTxt + '" style="width:44px;height:44px;flex:none;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:10px;background:transparent;color:#6B7280;cursor:pointer">' +
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></li>';
+    }).join('');
+    var options = r.cultures.map(function (c) {
+      return '<option value="' + esc(c) + '"' + (c === S.culture ? ' selected' : '') + '>' + esc(c) + '</option>';
+    }).join('');
+    $('vue').innerHTML =
+      '<p style="margin:0;font-size:14px;color:#374151">Pluie cumulée depuis chaque date de semis, jour du semis compris.</p>' +
+      '<ul aria-label="Semis enregistrés" style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:470px;overflow-y:auto">' + rows + '</ul>' +
+      (rows ? '' : '<p style="margin:0;font-size:14px;color:#4B5563;text-align:center">Aucun semis enregistré.</p>') +
+      '<section class="carte" aria-labelledby="t-add" style="display:flex;flex-direction:column;gap:10px"><h2 id="t-add" class="t">Ajouter un semis</h2>' +
+      '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">' +
+      '<div style="display:flex;flex-direction:column;gap:4px"><label for="semis-culture" style="font-size:12px;color:#4B5563">Culture</label>' +
+      '<select id="semis-culture" class="champ" style="padding:0 10px">' + options + '</select></div>' +
+      '<div style="display:flex;flex-direction:column;gap:4px"><label for="semis-date" style="font-size:12px;color:#4B5563">Date de semis</label>' +
+      '<input id="semis-date" class="champ" type="date" value="' + S.dSemis + '" max="' + r.aujourdhui + '" style="padding:0 10px"></div></div>' +
+      '<button type="button" id="semis-ajout" style="min-height:44px;border:0;border-radius:12px;background:#1D4ED8;color:#FFFFFF;font-size:15px;font-weight:600;cursor:pointer">Ajouter</button></section>';
+
+    $('semis-culture').onchange = function (e) { S.culture = e.target.value; };
+    $('semis-date').onchange = function (e) { S.dSemis = e.target.value; };
+    var envoi = function (methode, url, corps) {
+      return api(url, { method: methode, headers: { 'Content-Type': 'application/json' }, body: corps ? JSON.stringify(corps) : undefined })
+        .then(function (r2) { ok(); return vueSemis(r2); }).catch(erreur);
+    };
+    $('semis-ajout').onclick = function () { envoi('POST', 'api/semis', { culture: S.culture, date: S.dSemis }); };
+    document.querySelectorAll('[data-suppr]').forEach(function (b) {
+      b.onclick = function () { envoi('DELETE', 'api/semis?id=' + encodeURIComponent(b.dataset.suppr)); };
+    });
+  });
+}
+
+// ---------- Navigation ----------
+var VUES = { mesures: vueMesures, jour: vueJour, historique: vueHistorique, semis: vueSemis };
+function affiche() {
+  nav();
+  var o = onglet();
+  if (o !== 'mesures') { S.range = ''; rafraichitEntete().catch(erreur); }
+  return VUES[o]().then(ok).catch(erreur);
+}
+var connecte = !FB;
+window.addEventListener('hashchange', function () { if (connecte) { window.scrollTo(0, 0); affiche(); } });
+setInterval(function () {
+  var o = onglet();
+  if (document.hidden || !connecte) { return; }
+  if (o === 'mesures') { vueMesures().then(ok).catch(erreur); } else { rafraichitEntete().catch(function () {}); }
+}, 60000);
+
+function charge(src) {
+  return new Promise(function (ok2, ko) {
+    var e = document.createElement('script');
+    e.src = src; e.onload = ok2; e.onerror = function () { ko(new Error('impossible de charger ' + src)); };
+    document.head.appendChild(e);
+  });
+}
+function ecranConnexion(message) {
+  $('nav').style.display = 'none'; $('deco').hidden = true; $('maj').textContent = 'Connexion requise';
+  $('vue').innerHTML =
+    '<form id="connexion" class="carte" style="display:flex;flex-direction:column;gap:10px">' +
+    '<h2 class="t">Connexion</h2>' +
+    '<label for="c-mail" style="font-size:12px;color:#4B5563">E-mail</label>' +
+    '<input id="c-mail" class="champ" type="email" autocomplete="username" required style="padding:0 10px">' +
+    '<label for="c-mdp" style="font-size:12px;color:#4B5563">Mot de passe</label>' +
+    '<input id="c-mdp" class="champ" type="password" autocomplete="current-password" required style="padding:0 10px">' +
+    '<button type="submit" id="c-ok" style="min-height:44px;border:0;border-radius:12px;background:#1D4ED8;color:#FFFFFF;font-size:15px;font-weight:600;cursor:pointer">Se connecter</button>' +
+    '<p id="c-err" class="err" role="alert"' + (message ? '' : ' hidden') + '>' + esc(message || '') + '</p></form>';
+  $('connexion').onsubmit = function (ev) {
+    ev.preventDefault();
+    $('c-ok').disabled = true;
+    firebase.auth().signInWithEmailAndPassword($('c-mail').value.trim(), $('c-mdp').value).catch(function (e) {
+      var code = (e && e.code) || '';
+      ecranConnexion(/too-many-requests/.test(code) ? 'Trop d\'essais : réessaie dans quelques minutes.' :
+        /network/.test(code) ? 'Pas de connexion internet.' : 'E-mail ou mot de passe incorrect.');
+    });
+  };
+}
+if (!FB) {
+  affiche();
+} else {
+  charge(FB_SDK + 'app-compat.js').then(function () {
+    return Promise.all([charge(FB_SDK + 'auth-compat.js'), charge(FB_SDK + 'database-compat.js')]);
+  }).then(function () {
+    firebase.initializeApp(FB_CONFIG);
+    fbDb = firebase.database();
+    $('deco').onclick = function () { firebase.auth().signOut(); };
+    firebase.auth().onAuthStateChanged(function (u) {
+      connecte = !!u;
+      if (!u) { ecranConnexion(); return; }
+      $('nav').style.display = ''; $('deco').hidden = false;
+      affiche();
+    });
+  }).catch(erreur);
+}
+</script>
+</body>
+</html>

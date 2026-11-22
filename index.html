@@ -185,9 +185,9 @@ function entete(der, src) {
   if (!der) {
     t = 'Aucune trame reçue';
     if (src && src.station_nom) {
-      t = 'Pluie Météo-France : ' + src.station_nom + (src.station_km != null ? ' (' + fmt(src.station_km).replace(/,0$/, '') + ' km)' : '') +
+      t = 'Météo-France ' + src.station_nom + (src.station_km != null ? ' (' + fmt(src.station_km).replace(/,0$/, '') + ' km)' : '') +
         (src.mesures_jusquau ? ' jusqu\'au ' + dt(src.mesures_jusquau).getDate() + '/' + (dt(src.mesures_jusquau).getMonth() + 1) : '') +
-        ', puis estimation AROME · pluviomètre pas encore branché';
+        ' puis AROME · pluviomètre non branché';
     }
   } else {
     var heure = der.local.slice(11, 16);
@@ -628,7 +628,7 @@ if (!FB) {
     firebase.auth().onAuthStateChanged(function (u) {
       connecte = !!u;
       if (!u) { ecranConnexion(); return; }
-      $('nav').style.display = ''; $('deco').hidden = false;
+      $('nav').style.display = 'grid'; $('deco').hidden = false;
       affiche();
     });
   }).catch(erreur);

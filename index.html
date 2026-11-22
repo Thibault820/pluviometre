@@ -608,7 +608,11 @@ function ecranConnexion(message) {
     firebase.auth().signInWithEmailAndPassword($('c-mail').value.trim(), $('c-mdp').value).catch(function (e) {
       var code = (e && e.code) || '';
       ecranConnexion(/too-many-requests/.test(code) ? 'Trop d\'essais : réessaie dans quelques minutes.' :
-        /network/.test(code) ? 'Pas de connexion internet.' : 'E-mail ou mot de passe incorrect.');
+        /network/.test(code) ? 'Pas de connexion internet.' :
+        /invalid-email/.test(code) ? 'Adresse e-mail mal écrite.' :
+        /user-disabled/.test(code) ? 'Ce compte est désactivé.' :
+        /invalid-credential|invalid-login|wrong-password|user-not-found/.test(code) ? 'E-mail ou mot de passe incorrect.' :
+        'Connexion impossible (' + (code || (e && e.message) || 'erreur inconnue') + ').');
     });
   };
 }
